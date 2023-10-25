@@ -1,6 +1,5 @@
 import std/[strutils, strformat, sequtils]
 import serial
-import nimdebug
 
 const modBusVer* = "0.3.0"
 
@@ -45,8 +44,6 @@ proc crcModbus(dati: openArray[byte]): uint16 =
     polinomio: uint16 = 0xA001 #polinomio divisore.
   var
     crc: uint16 = 0xFFFF #carico crc con il valore 0xFFFF.
-  
-  textdbg(fmt"------ {dati} -----")
   for bytes in dati: #controllo di tutti i bytes dal dato da inviare...
     crc = crc xor bytes #faccio xor con crc ed il primo byte.
     for bits in 0..7: #devo controllare tutti i bit del dato (byte) in esame.
@@ -55,7 +52,6 @@ proc crcModbus(dati: openArray[byte]): uint16 =
         crc = crc xor polinomio # ..e faccio xor tra crc ed il divisore (polinomio MODBUS).
       else: #se invece è zero...
         crc = crc shr 1 # sposto solo di un bit a dx il registro crc senza fare xor.
-  textdbg(fmt"CRC = 0x{crc.toHex}")
   result = crc
   
 proc byteLow(data: uint16): byte = #splitta il numero 16bit in un bite (parte bassa).
@@ -65,50 +61,37 @@ proc byteHIGH(data: uint16): byte = #splitta il numero 16bit in un bite (parte a
   result = byte(data shr 8)
 
 proc txUart(self: Modbus; data: array[8, byte]) = #proc per la trasmissione del dato in MODBUS:
-  textdbg("Inizio trasmissione dati su UART....")
   try: #prova se la seriale  è collegta se si....
     let port = newSerialPort(self.port) #crea oggetto porta seriale.
     port.open(self.baud, self.parity, self.numBites, self.stopBits, readTimeout = 20) #inizializza i parametri correti di tx.
-    textdbg(fmt"Byte in partenza---> {data}")
     discard port.write(addr data[0], int32(len(data))) #scrive sulla porta il dato completo (con crc).
     port.close() #chiudi la porta!
   except InvalidSerialPortError:
     self.serialFail = true
-    textdbg("ERRORE! Seriale Sconnessa!!")
 
 proc clearBuffer(self: Modbus; data: seq[byte]; index: int32) = #pulsce i dati per tornare solo i dati senza crc ed indirzzi.
-  textdbg(fmt"Pulisco il bafer {data}")
   self.dataByteFinal = data[3..index] #tiene solo i valori dei registri e elimina testa e coda.
-  textdbg(fmt" ---DATI da USARE:: {self.dataByteFinal}")
 
 proc rxUart(self: Modbus) = #procedura di ricezione dati(variabili) dal MODBUS:
   var
     bufferInHead: array[0..2, byte] #crea un arri fiisso per i dati di testa (son sempre 3 Byte)
     bufferDataFinal: seq[byte] #crea uan sequanza (variabile) ci potrebbero esseree piu dati non si sa a priori.
     index: int32
-  textdbg("Ricezione DAti su UART....")
   try: #prova se la seriale  è collegta se si....
     let port = newSerialPort(self.port) #crea oggetto porta seriale.
     port.open(self.baud, self.parity, self.numBites, self.stopBits, writeTimeout = 1000) #inizializza i parametri correti di rx.
     discard port.read(addr bufferInHead[0], 3) #leggi i primi 3 Byte arrivati sulla seriale.
-    textdbg(fmt" baffer in Head : {bufferInHead}")
     index = int32(bufferInHead[2]*2) # modb dice quanti dati registri ci sono, ma vanno moltiplicati x 2 (1 = 2 da 8bit).
     bufferDataFinal.setLen(index) #inizializza la sequenza con il numero di Byte in arrivo.
-    textdbg(fmt" baffer Final len : {bufferDataFinal}")
     discard port.read(addr bufferDataFinal[0], index) #legge seriale e metti i dati a partire dal primo elemento di bufferDataFinal.
-    textdbg(fmt" baffer Final DATA : {bufferDataFinal}")
     bufferDataFinal = bufferInHead.toSeq() & bufferDataFinal #unisci "test" e "coda" per fare il crc di ricezione (se = 0 è ok).
-    textdbg(fmt" baffer Final DATA Totale da  fare CRC: {bufferDataFinal}")
     port.close() #chiudi la seriale.
   except InvalidSerialPortError: #se la seriale è scollegata gestiqui qui l'errore
     self.serialFail = true #pone la variabile a TRUE cosi poi si può analizzarla e gestirla nel MAIN.
-    textdbg("ERRORE! Seriale Sconnessa!!")
   if crcModbus(bufferDataFinal) == 0: #se il crc ricevuto = 0 allora nessun errore di trasmissione.
-    textdbg(fmt"CRC corretto: {crcModbus(bufferDataFinal)}")
     self.crcFail = false #variabile posta a false..gestibile nel main.
     self.clearBuffer(bufferDataFinal, index)
   else: #se 1= 0 allora ce stato un problema.
-    textdbg(fmt"CRC ERRATO!: {crcModbus(bufferDataFinal)}")
     self.crcFail = true #poni la variabile a true.. puoi gestire nel prog principale l'errore.
 
 proc showRegister*(self: Modbus): seq[byte] = #proc per richiedere un valore memorizato senza interrogare il dispositivo.
@@ -124,12 +107,10 @@ proc readRegister(self: Modbus; addrDevice, addrRegister, numrRegRead: byte, typ
   byteTx[3] = byteLOW(addrRegister) #4- scrive il byte BASSO dell'indirizzo del registro da interrogare.
   byteTx[4] = byteHIGH(numrRegRead) #5- scrive il byte ALTO den numero di registri consecutivi da interrogare.
   byteTx[5] = byteLow(numrRegRead) #6- scrive il byte BASSO den numero di registri consecutivi da interrogare.
-  textdbg(fmt"Dati  Layer Modbas 1 {byteTx}")
   if self.txMode == false: #se siamo in modalità UART...
     let crc = crcModbus(byteTx[0..5]) #chiama la funzione di conctrollo cec e fallo con i prim 6 Byte.
     byteTx[6] = byteLOW(crc) #scrive il Byte BASSO del crc ricavato (ATTENZIONE!! il byte scritto inverso ecco perhè prima Byte LOW).
     byteTx[7] = byteHIGH(crc) #scrive il Byte ALTO del crc ricavato (ATTENZIONE!! il byte scritto inverso ecco perhè prima Byte LOW).
-    textdbg(fmt"Dati  Layer Modbas 2 {byteTx}")
   self.txUart(byteTx) #solo ra manda tutto alla procedura di tTRASMISSIONE dati. -->
   self.rxUart() #e ora ascolta la risposta (forse ci va una pausa??). <---
   result = self.dataByteFinal #ritorna indietro il risultato finale (pulito).
