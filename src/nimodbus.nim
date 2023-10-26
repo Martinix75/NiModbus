@@ -1,7 +1,7 @@
 import std/[strutils, strformat, sequtils]
 import serial
 
-const modBusVer* = "0.3.1"
+const modBusVer* = "0.4.0"
 
 type
   Modbus = ref object
@@ -60,34 +60,26 @@ proc byteLow(data: uint16): byte = #splitta il numero 16bit in un bite (parte ba
 proc byteHIGH(data: uint16): byte = #splitta il numero 16bit in un bite (parte alda).
   result = byte(data shr 8)
 
-proc txUart(self: Modbus; data: array[8, byte]) = #proc per la trasmissione del dato in MODBUS:
-  try: #prova se la seriale  è collegta se si....
-    let port = newSerialPort(self.port) #crea oggetto porta seriale.
-    port.open(self.baud, self.parity, self.numBites, self.stopBits, readTimeout = 20) #inizializza i parametri correti di tx.
-    discard port.write(addr data[0], int32(len(data))) #scrive sulla porta il dato completo (con crc).
-    port.close() #chiudi la porta!
-  except InvalidSerialPortError:
-    self.serialFail = true
-
 proc clearBuffer(self: Modbus; data: seq[byte]; index: int32) = #pulsce i dati per tornare solo i dati senza crc ed indirzzi.
   self.dataByteFinal = data[3..index] #tiene solo i valori dei registri e elimina testa e coda.
 
-proc rxUart(self: Modbus) = #procedura di ricezione dati(variabili) dal MODBUS:
+proc modBusCom(self: Modbus; data: array[8, byte]) = #proc per la trasmissione del dato in MODBUS:
   var
     bufferInHead: array[0..2, byte] #crea un arri fiisso per i dati di testa (son sempre 3 Byte)
     bufferDataFinal: seq[byte] #crea uan sequanza (variabile) ci potrebbero esseree piu dati non si sa a priori.
     index: int32
   try: #prova se la seriale  è collegta se si....
     let port = newSerialPort(self.port) #crea oggetto porta seriale.
-    port.open(self.baud, self.parity, self.numBites, self.stopBits, writeTimeout = 1000) #inizializza i parametri correti di rx.
+    port.open(self.baud, self.parity, self.numBites, self.stopBits, readTimeout = 500) #inizializza i parametri correti di tx.
+    discard port.write(addr data[0], int32(len(data))) #scrive sulla porta il dato completo (con crc).
     discard port.read(addr bufferInHead[0], 3) #leggi i primi 3 Byte arrivati sulla seriale.
     index = int32(bufferInHead[2]*2) # modb dice quanti dati registri ci sono, ma vanno moltiplicati x 2 (1 = 2 da 8bit).
     bufferDataFinal.setLen(index) #inizializza la sequenza con il numero di Byte in arrivo.
     discard port.read(addr bufferDataFinal[0], index) #legge seriale e metti i dati a partire dal primo elemento di bufferDataFinal.
     bufferDataFinal = bufferInHead.toSeq() & bufferDataFinal #unisci "test" e "coda" per fare il crc di ricezione (se = 0 è ok).
     port.close() #chiudi la seriale.
-  except InvalidSerialPortError: #se la seriale è scollegata gestiqui qui l'errore
-    self.serialFail = true #pone la variabile a TRUE cosi poi si può analizzarla e gestirla nel MAIN.
+  except InvalidSerialPortError:
+    self.serialFail = true
   if crcModbus(bufferDataFinal) == 0: #se il crc ricevuto = 0 allora nessun errore di trasmissione.
     self.crcFail = false #variabile posta a false..gestibile nel main.
     self.clearBuffer(bufferDataFinal, index)
@@ -111,8 +103,7 @@ proc readRegister(self: Modbus; addrDevice, addrRegister, numrRegRead: byte, typ
     let crc = crcModbus(byteTx[0..5]) #chiama la funzione di conctrollo cec e fallo con i prim 6 Byte.
     byteTx[6] = byteLOW(crc) #scrive il Byte BASSO del crc ricavato (ATTENZIONE!! il byte scritto inverso ecco perhè prima Byte LOW).
     byteTx[7] = byteHIGH(crc) #scrive il Byte ALTO del crc ricavato (ATTENZIONE!! il byte scritto inverso ecco perhè prima Byte LOW).
-  self.txUart(byteTx) #solo ra manda tutto alla procedura di tTRASMISSIONE dati. -->
-  self.rxUart() #e ora ascolta la risposta (forse ci va una pausa??). <---
+  self.modBusCom(byteTx) #solo ra manda tutto alla procedura di tTRASMISSIONE dati. -->
   result = self.dataByteFinal #ritorna indietro il risultato finale (pulito).
 
 proc readInputRegister*(self: Modbus; addrDevice, addrRegister, numrRegRead: byte): seq[byte] = #proc alias pr INPUT Register
