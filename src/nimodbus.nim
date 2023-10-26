@@ -1,7 +1,7 @@
 import std/[strutils, strformat, sequtils]
 import serial
 
-const modBusVer* = "0.3.0"
+const modBusVer* = "0.3.1"
 
 type
   Modbus = ref object
@@ -132,6 +132,16 @@ proc readHoldingRegister*(self: Modbus; addrDevice, addrRegister, numrRegRead: b
   ## - *addrRegister* = Address of the register to be examined.
   ## - *numrRegRead* = Number of **consecutive** registers to read.
   result = self.readRegister(addrDevice, addrRegister, numrRegRead, typeReg =0x03) #chiama la fera proc di generazione con 0x03
+
+proc isCrcFail*(self: Modbus): bool =
+  ## Return "true"if CRC control has been successful.
+  ## Return "false" if CRC control is not correct.
+  result = self.crcFail
+
+proc isSerialFail*(self: Modbus): bool =
+  ## Return "true"if Serial connection has been successful.
+  ## Return "false" if Serial connection is failed.
+  result = self.serialFail
   
 when isMainModule:
   let
@@ -139,7 +149,7 @@ when isMainModule:
   
   let gefran = newModbusUart("/dev/ttyUSB0", 9600, "none", 8, 2)
   var  test123 = gefran.readInputRegister(2, 86, 1)
-  if gefran.crcFail == false:
+  if gefran.isCrcFail() == false:
     echo(fmt"Temperatura: {test123[0]+test123[1]}°C")
   else:
     echo"CRCFALLITO!!!!!!!!!!!"
