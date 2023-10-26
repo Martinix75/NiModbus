@@ -2,7 +2,7 @@
 
 version       = "0.3.0"
 author        = "Martinix75"
-description   = "ModBus."
+description   = "ModBus for Nim"
 license       = "MIT"
 srcDir        = "src"
 
