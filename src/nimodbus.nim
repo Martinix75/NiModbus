@@ -1,7 +1,7 @@
 import std/[strutils, strformat, sequtils]
 import serial
 
-const modBusVer* = "0.4.0"
+const modBusVer* = "0.5.0" #unisci e visulaizza il registro selezionato.(vanno trattati)
 
 type
   Modbus = ref object
@@ -44,6 +44,7 @@ proc crcModbus(dati: openArray[byte]): uint16 =
     polinomio: uint16 = 0xA001 #polinomio divisore.
   var
     crc: uint16 = 0xFFFF #carico crc con il valore 0xFFFF.
+    
   for bytes in dati: #controllo di tutti i bytes dal dato da inviare...
     crc = crc xor bytes #faccio xor con crc ed il primo byte.
     for bits in 0..7: #devo controllare tutti i bit del dato (byte) in esame.
@@ -69,8 +70,9 @@ proc modBusCom(self: Modbus; data: array[8, byte]) = #proc per la trasmissione d
     bufferDataFinal: seq[byte] #crea uan sequanza (variabile) ci potrebbero esseree piu dati non si sa a priori.
     index: int32
   try: #prova se la seriale  è collegta se si....
+    self.dataByteFinal.setLen(0) #resetta la lista pe rogni buon conto!
     let port = newSerialPort(self.port) #crea oggetto porta seriale.
-    port.open(self.baud, self.parity, self.numBites, self.stopBits, readTimeout = 500) #inizializza i parametri correti di tx.
+    port.open(self.baud, self.parity, self.numBites, self.stopBits, readTimeout = 20) #inizializza i parametri correti di tx.
     discard port.write(addr data[0], int32(len(data))) #scrive sulla porta il dato completo (con crc).
     discard port.read(addr bufferInHead[0], 3) #leggi i primi 3 Byte arrivati sulla seriale.
     index = int32(bufferInHead[2]*2) # modb dice quanti dati registri ci sono, ma vanno moltiplicati x 2 (1 = 2 da 8bit).
@@ -79,17 +81,15 @@ proc modBusCom(self: Modbus; data: array[8, byte]) = #proc per la trasmissione d
     bufferDataFinal = bufferInHead.toSeq() & bufferDataFinal #unisci "test" e "coda" per fare il crc di ricezione (se = 0 è ok).
     port.close() #chiudi la seriale.
   except InvalidSerialPortError:
+    echo("----- Seraial Fail! -----")
     self.serialFail = true
   if crcModbus(bufferDataFinal) == 0: #se il crc ricevuto = 0 allora nessun errore di trasmissione.
     self.crcFail = false #variabile posta a false..gestibile nel main.
     self.clearBuffer(bufferDataFinal, index)
   else: #se 1= 0 allora ce stato un problema.
+    echo("----- CRC Fail! -----")
     self.crcFail = true #poni la variabile a true.. puoi gestire nel prog principale l'errore.
 
-proc showRegister*(self: Modbus): seq[byte] = #proc per richiedere un valore memorizato senza interrogare il dispositivo.
-  ## Show the stored values, without requesting the device on serial.
-  result = self.dataByteFinal
-  
 proc readRegister(self: Modbus; addrDevice, addrRegister, numrRegRead: byte, typeReg: byte): seq[byte] = #proc creazione byte da trasmettere.
   var byteTx: array[0..7, byte] 
   if self.txMode == false: #se siamo in modalità UART...
@@ -105,7 +105,29 @@ proc readRegister(self: Modbus; addrDevice, addrRegister, numrRegRead: byte, typ
     byteTx[7] = byteHIGH(crc) #scrive il Byte ALTO del crc ricavato (ATTENZIONE!! il byte scritto inverso ecco perhè prima Byte LOW).
   self.modBusCom(byteTx) #solo ra manda tutto alla procedura di tTRASMISSIONE dati. -->
   result = self.dataByteFinal #ritorna indietro il risultato finale (pulito).
+# ------------------- end private porcs -----------------------------------------
+#-------------------- start pubblic procs ---------------------------------------
 
+proc showRegister*(self: Modbus): seq[byte] = #proc per richiedere un valore memorizato senza interrogare il dispositivo.
+  ## Show the stored values, without a new requesting the device on serial.
+  result = self.dataByteFinal
+
+proc dataRegister*(self: Modbus, index: uint8 = 1): uint16 =
+  ##The "correct" value returns, for example a temperature greater than 255 ° C (not representable with the first byte only).
+  ##
+  ## **Parameters:**
+  ## - *index* = data of interest to be represented (1 Byte, 2 Bytes etc).
+  if index >= 1 or float(index) > (self.dataByteFinal.len() / 2):
+    let byteH: uint16 = uint16(self.dataByteFinal[index-1]) shl 8
+    result = byteH or uint16(self.dataByteFinal[index])
+
+#[proc allValuesInRegister*(self: Modbus) = #sperimentale ritorna seq di tutti i valori sistemati nel registro #in vero 0.6.0.
+  discard ]#
+
+proc lenRegister*(self: Modbus): int = #ritorna quanti dati ci sono nel registri(quanti valori 16 Byte).
+  ## Return how many bytes contains the register (remember that the value is always written on 2Byte).
+  result = self.dataByteFinal.len()
+  
 proc readInputRegister*(self: Modbus; addrDevice, addrRegister, numrRegRead: byte): seq[byte] = #proc alias pr INPUT Register
   ## This function code is used to read from 1 to 125 contiguous input registers in a remote device 0x04.
   ##
@@ -113,6 +135,8 @@ proc readInputRegister*(self: Modbus; addrDevice, addrRegister, numrRegRead: byt
   ## - *addrDevice* = Address of the connected physical device.
   ## - *addrRegister* = Address of the register to be examined.
   ## - *numrRegRead* = Number of **consecutive** registers to read.
+  ##
+  ## Provide the grace values contained in the data sent by the Master.
   result = self.readRegister(addrDevice, addrRegister, numrRegRead, typeReg = 0x04) #chiama la fera proc di generazione con 0x04.
   
 proc readHoldingRegister*(self: Modbus; addrDevice, addrRegister, numrRegRead: byte):seq[byte]= #proc alias pr HOLDINGRegister
@@ -122,6 +146,8 @@ proc readHoldingRegister*(self: Modbus; addrDevice, addrRegister, numrRegRead: b
   ## - *addrDevice* = Address of the connected physical device.
   ## - *addrRegister* = Address of the register to be examined.
   ## - *numrRegRead* = Number of **consecutive** registers to read.
+  ##
+  ## Provide the grace values contained in the data sent by the Master.
   result = self.readRegister(addrDevice, addrRegister, numrRegRead, typeReg =0x03) #chiama la fera proc di generazione con 0x03
 
 proc isCrcFail*(self: Modbus): bool =
